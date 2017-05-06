@@ -76,6 +76,7 @@ always_comb begin
 	endcase
 end
 
+/*
 always_ff @(posedge clk, negedge rst_n) begin
   if (!rst_n)
     buzz_cnt <= 16'h0000;
@@ -86,7 +87,8 @@ always_ff @(posedge clk, negedge rst_n) begin
   else
     buzz_cnt <= buzz_cnt;
 end
-
+*/
+	
 always @(posedge clk or negedge rst_n) begin
   if (!rst_n) begin
     buzz <= 1'b0; // The initial value doesn't really matter, but always good to initialize.
