@@ -11,7 +11,7 @@ logic [2:0] chnnl_counter;
 logic timer_start, timer_clr; // start or clear timer
 logic[12:0] timer4096;
 logic chnnl_clr, chnnl_inc;
-typedef enum reg[3:0] {IDLE, STTL, CALC_1, SHRT_WAIT, CALC_2, INTG, ICOMP, PCOMP, ACCUM_R, RIGHT, ACCUM_L, LEFT} state_t;
+typedef enum reg[4:0] {IDLE, STTL, CALC_1, SHRT_WAIT, CALC_2, INTG, ICOMP, WAIT_M_1, PCOMP, WAIT_M_2, ACCUM_R, RIGHT, ACCUM_L, LEFT} state_t;
 state_t state, nxt_state;
 
 logic PWM, PWM_en, PWM_clr;
@@ -25,25 +25,30 @@ logic [13:0]Pterm;
 logic [11:0]Iterm;
 logic [11:0]Fwd;
 logic [11:0]Error;
-logic [11:0]Intgrl, Intgrl_temp;
+logic [11:0]Intgrl;
 logic [2:0]src1sel, src0sel;
 logic multiply, sub, mult2, mult4, saturate;
 logic [15:0] dst;
 
 logic clr_Accum, dst_Accum, dst_Error, dst_Intgrl, dst_Icomp, dst_Pcomp, dst_rht_reg, dst_lft_reg; 
 logic [1:0] int_dec;
+logic inc_int_dec;
 
-alu iALU(dst, Accum, Pcomp, Icomp, Pterm, Iterm, Fwd, A2D_res, Error, Intgrl, src1sel, src0sel, multiply, sub, mult2, mult4, saturate);
+alu iALU(Accum, Pcomp, Pterm, Fwd, A2D_res, Error, Intgrl, Icomp, Iterm, src1sel, src0sel, multiply, sub, mult2, mult4, saturate, dst);
 
 assign lft = lft_reg[11:1];
 assign rht = rht_reg[11:1];
+
+assign IR_in_en = (chnnl == 1 || chnnl == 0) ? PWM : 0;
+assign IR_mid_en =(chnnl == 2 || chnnl == 4) ? PWM : 0;
+assign IR_out_en = (chnnl == 3 || chnnl == 7) ? PWM : 0;
 
 always_ff @(posedge clk, negedge rst_n) begin
 	if (!rst_n)
 		chnnl_counter <= 3'b000;
 	else if(chnnl_clr)
 		chnnl_counter <= 3'b000;
-	else if(chnnl_inc)
+	else if(go && chnnl_inc)
 		chnnl_counter <= chnnl_counter + 1'b1;
 	else
 		chnnl_counter <= chnnl_counter;
@@ -96,27 +101,23 @@ always_ff @(posedge clk, negedge rst_n) begin
 		Error <= Error;
 end
 
-assign dst2Int = &int_dec;
+always_ff @(posedge clk, negedge rst_n) begin
+	if (!rst_n)
+		int_dec <= 2'b00;
+	else if (inc_int_dec) 
+		int_dec <= int_dec + 1;
+	else 
+		int_dec <= int_dec;
+end 
 
 always_ff @(posedge clk, negedge rst_n) begin
-	if (!rst_n)begin
-		Intgrl <= 12'h000;
-		Intgrl_temp <= 12'h000;
-		int_dec <= 2'b00;
-	end
-	else if(dst_Intgrl) begin
-		Intgrl_temp <= dst;
-		int_dec <= int_dec + 1'b1;
-		if(dst2Int) begin
-			Intgrl <= Intgrl_temp;
-		end
-	end
-	else begin
-		Intgrl <= Intgrl;
-		Intgrl_temp <= Intgrl_temp;
-		int_dec <= int_dec;
-	end
-end
+  if (!rst_n)
+    Intgrl <= 12'h000;
+  else if (dst_Intgrl)
+    Intgrl <= dst[11:0];
+  else 
+  	Intgrl <= Intgrl;
+end 
 
 always_ff @(posedge clk, negedge rst_n) begin
   	if (!rst_n) begin
@@ -131,7 +132,7 @@ end
 
 always_ff @(posedge clk, negedge rst_n) begin
 	if (!rst_n || timer_clr)
-		timer4096 <= 12'h000;
+		timer4096 <= 13'h000;
 	else if(timer_start)
 		timer4096 <= timer4096 + 1'b1;
 	else
@@ -143,7 +144,7 @@ assign PWM_clr = (PWM_counter == 8'h8c) ? 1'b1:1'b0;
 
 always_ff @(posedge clk, negedge rst_n) begin
   if (!rst_n)
-    PWM_counter <= 10'h3FF;
+    PWM_counter <= 8'h00;
   else
     PWM_counter <= PWM_counter + 1'b1;
 end
@@ -199,9 +200,6 @@ always_comb begin
   	start_conv = 1'b0;
   	timer_start = 1'b0;
   	timer_clr = 1'b0;
-  	IR_in_en = 1'b0;
-  	IR_mid_en = 1'b0;
-  	IR_out_en = 1'b0;
   	chnnl_clr = 1'b0;
   	chnnl_inc = 1'b0;
   	src1sel = 1'b0;
@@ -219,6 +217,7 @@ always_comb begin
   	dst_Pcomp = 1'b0; 
   	dst_rht_reg = 1'b0;
   	dst_lft_reg = 1'b0;
+	inc_int_dec = 0;
 
 	case (state)
 		IDLE: begin
@@ -228,16 +227,6 @@ always_comb begin
 				chnnl_clr = 1'b1;
 				clr_Accum = 1'b1;
 				timer_start = 1'b1;
-				case (chnnl_counter)
-        				3'b000: IR_in_en = 1'b1;
-        				3'b010: IR_mid_en = 1'b1;
-        				3'b100: IR_out_en = 1'b1;
-        				default: begin
-          					IR_in_en = 1'b0;
-         				 	IR_mid_en = 1'b0;
-          					IR_out_en = 1'b0;
-        					end
-     				endcase
 				nxt_state = STTL;
 			end
 		end
@@ -253,6 +242,7 @@ always_comb begin
 		end
 		CALC_1: begin
 			if(cnv_cmplt) begin
+				timer_clr = 1'b1;
 				case (chnnl_counter)
         				3'b000: begin
 						src1sel = 3'b000;
@@ -272,10 +262,9 @@ always_comb begin
 						dst_Accum = 1'b1;
 					end
      				endcase
-				timer_clr = 1'b1;
+				nxt_state = SHRT_WAIT;	
 				chnnl_inc = 1'b1;
 				timer_start = 1'b1;
-				nxt_state = SHRT_WAIT;	
 			end
 			else
 				nxt_state = CALC_1;
@@ -292,6 +281,7 @@ always_comb begin
 		end
 		CALC_2: begin
 			if(cnv_cmplt) begin
+				timer_clr = 1'b1;
 				case (chnnl_counter)
         				3'b001: begin
 						src1sel = 3'b000;
@@ -315,21 +305,10 @@ always_comb begin
 						dst_Error = 1'b1;
 					end
      				endcase
-				timer_clr = 1'b1;
 				chnnl_inc = 1'b1;
 				timer_start = 1'b1;
 				if(chnnl_counter != 3'b101) begin
 					timer_start = 1'b1;
-					case (chnnl_counter)
-        					3'b000: IR_in_en = 1'b1;
-        					3'b010: IR_mid_en = 1'b1;
-        					3'b100: IR_out_en = 1'b1;
-        					default: begin
-          						IR_in_en = 1'b0;
-         				 		IR_mid_en = 1'b0;
-          						IR_out_en = 1'b0;
-        					end
-     					endcase
 					nxt_state = STTL;
 				end
 				else 
@@ -343,22 +322,39 @@ always_comb begin
 			src1sel = 3'b011; // Error>>4
         		src0sel = 3'b001; // Integrl
         		saturate = 1'b1;
-        		dst_Intgrl = 1'b1;
+			inc_int_dec = 1;
+        		dst_Intgrl = &int_dec;
         		nxt_state = ICOMP;
 		end
 		ICOMP:begin
 			src1sel = 3'b001; // Iterm
         		src0sel = 3'b001; // Integrl
         		multiply = 1'b1;
-        		dst_Icomp = 1'b1;
-        		nxt_state = PCOMP;
+        		saturate = 0;
+        		nxt_state = WAIT_M_1;
+		end
+		WAIT_M_1: begin
+			nxt_state = PCOMP;
+			src1sel = 3'b001;
+			src0sel = 3'b001;
+			multiply = 1;
+			saturate = 0;
+			dst_Icomp = 1;
 		end
 		PCOMP: begin
 			src1sel = 3'b010; // Error
         		src0sel = 3'b100; // Pterm
         		multiply = 1'b1;
-        		dst_Pcomp = 1'b1;
-        		nxt_state = ACCUM_R;
+        		saturate = 0;
+        		nxt_state = WAIT_M_2;
+		end
+		WAIT_M_2: begin
+			nxt_state = ACCUM_R;
+			src1sel = 3'b010;
+			src0sel = 3'b100;
+			multiply = 1;
+			saturate = 0;
+			dst_Pcomp = 1;
 		end
 		ACCUM_R: begin
 			src1sel = 3'b100; // Fwd
@@ -393,5 +389,4 @@ end
 
 
 endmodule
-
 
