@@ -1,1 +1,1 @@
-# 551-Spring-2017-Project
+Team members:Qiannan Guo (Alina), Jiatong Li, Kenny Har, Pengfei Zhu(Dean) 
